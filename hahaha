@@ -1,0 +1,371 @@
+-- Zyrex ImGui menu port. Place this ModuleScript in ReplicatedStorage.
+-- This module builds a client-side ScreenGui; gameplay behavior is supplied through onChanged/onExecute.
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+
+local ZyrexUI = {}
+
+local C = {
+	window = Color3.fromRGB(10, 7, 8), title = Color3.fromRGB(18, 15, 17),
+	panel = Color3.fromRGB(18, 15, 17), frame = Color3.fromRGB(26, 22, 23),
+	hover = Color3.fromRGB(34, 30, 31), border = Color3.fromRGB(34, 28, 30),
+	text = Color3.fromRGB(218, 218, 218), muted = Color3.fromRGB(120, 116, 118),
+	accent = Color3.fromRGB(87, 190, 234),
+	accentHovered = Color3.fromRGB(0, 122, 200), accentActive = Color3.fromRGB(0, 122, 200),
+	button = Color3.fromRGB(26, 22, 23), buttonActive = Color3.fromRGB(21, 18, 19),
+	frameHovered = Color3.fromRGB(34, 30, 31), frameActive = Color3.fromRGB(21, 18, 19),
+	popup = Color3.fromRGB(18, 15, 17),
+}
+local tabs = {
+	{ "Combat", { "Legit", "Silent", "Aimbot", "Trigger" } },
+	{ "Visuals", { "World", "Local", "ESP", "Visualizers" } },
+	{ "Skin Changer", { "Skins", "Knives", "Custom" } },
+	{ "Movement", { "Legit", "Rage" } },
+	{ "Misc", {} }, { "Lua", {} }, { "Settings", {} },
+}
+local defaultScripts = {
+	["radar_hack.lua"] = "", ["spectator_list.lua"] = "",
+	["auto_jump.lua"] = "", ["anti_aim.lua"] = "", ["anti_troll.lua"] = "",
+}
+
+local function make(class, props, parent)
+	local obj = Instance.new(class)
+	for key, value in pairs(props) do obj[key] = value end
+	obj.Parent = parent
+	return obj
+end
+local function round(obj, radius)
+	make("UICorner", { CornerRadius = UDim.new(0, radius) }, obj)
+	return obj
+end
+local function stroke(obj)
+	make("UIStroke", { Color = C.border, Thickness = 1 }, obj)
+	return obj
+end
+local function pad(obj, n)
+	make("UIPadding", { PaddingLeft = UDim.new(0,n), PaddingRight = UDim.new(0,n), PaddingTop = UDim.new(0,n), PaddingBottom = UDim.new(0,n) }, obj)
+end
+local function label(parent, text, size, color)
+	return make("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1,0,0,size+8), Font = Enum.Font.GothamMedium,
+		TextSize = size, Text = text, TextColor3 = color or C.text, TextXAlignment = Enum.TextXAlignment.Left }, parent)
+end
+local function button(parent, text, width, height)
+	local b = round(make("TextButton", { Size = UDim2.fromOffset(width,height), BackgroundColor3 = C.button,
+		Text = text, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = C.text, AutoButtonColor = false }, parent), 4)
+	stroke(b)
+	b.MouseEnter:Connect(function() b.BackgroundColor3 = C.hover end)
+	b.MouseLeave:Connect(function() b.BackgroundColor3 = C.button end)
+	return b
+end
+local function stack(parent, gap)
+	make("UIListLayout", { Padding = UDim.new(0,gap), SortOrder = Enum.SortOrder.LayoutOrder }, parent)
+end
+local function panel(parent, width)
+	local f = round(make("Frame", { Size = UDim2.new(width or 1, width and -5 or 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = C.panel, BorderSizePixel = 0 }, parent), 5)
+	stroke(f); pad(f, 13); stack(f, 10)
+	return f
+end
+local function section(parent, title)
+	local l = label(parent, title, 13, C.accent)
+	l.Font = Enum.Font.GothamSemibold
+	return l
+end
+
+function ZyrexUI.mount(options)
+	options = options or {}
+	local playerGui = options.parent or Players.LocalPlayer:WaitForChild("PlayerGui")
+	local old = playerGui:FindFirstChild("ZyrexUI")
+	if old then old:Destroy() end
+	local state = {}
+	local scripts = table.clone(defaultScripts)
+	if options.scripts then for name, source in pairs(options.scripts) do scripts[name] = source end end
+	local connections = {}
+	local pageConnections = {}
+	local function changed(key, value)
+		state[key] = value
+		if options.onChanged then options.onChanged(key, value, state) end
+	end
+	local gui = make("ScreenGui", { Name = "ZyrexUI", ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, playerGui)
+	local window = round(make("Frame", { Name = "Window", Size = UDim2.fromOffset(760,554), Position = UDim2.new(.5,-380,.5,-277),
+		BackgroundColor3 = C.window, BorderSizePixel = 0, ClipsDescendants = true }, gui), 7)
+	stroke(window)
+	local scale = make("UIScale", { Scale = 1 }, window)
+	local camera = workspace.CurrentCamera
+	local function resize()
+		if camera then
+			local v = camera.ViewportSize
+			scale.Scale = math.min(1, (v.X - 20)/760, (v.Y - 20)/554)
+		end
+	end
+	resize()
+	if camera then table.insert(connections, camera:GetPropertyChangedSignal("ViewportSize"):Connect(resize)) end
+	local header = make("Frame", { Size = UDim2.new(1,0,0,48), BackgroundColor3 = C.title, BorderSizePixel = 0 }, window)
+	label(header, "Zyrex", 16).Position = UDim2.fromOffset(16,8)
+	local close = button(header, "×", 28, 28)
+	close.Position = UDim2.new(1,-38,0,10)
+	close.MouseButton1Click:Connect(function() gui.Enabled = false end)
+	local divider = make("Frame", { Position = UDim2.fromOffset(0,47), Size = UDim2.new(1,0,0,1), BackgroundColor3 = C.border, BorderSizePixel = 0 }, header)
+	local dragging, dragStart, startPos = false, nil, nil
+	header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging, dragStart, startPos = true, input.Position, window.Position
+		end
+	end)
+	table.insert(connections, UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+	end))
+	table.insert(connections, UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = (input.Position - dragStart)/scale.Scale
+			window.Position = UDim2.new(startPos.X.Scale,startPos.X.Offset+delta.X,startPos.Y.Scale,startPos.Y.Offset+delta.Y)
+		end
+	end))
+	local nav = make("Frame", { Position = UDim2.fromOffset(16,64), Size = UDim2.new(1,-32,0,40), BackgroundTransparency = 1 }, window)
+	local body = make("Frame", { Position = UDim2.fromOffset(0,116), Size = UDim2.new(1,0,1,-116), BackgroundTransparency = 1 }, window)
+	local navButtons = {}
+	local selected = {1,1,1,1,1,1,1}
+	local current = 1
+	local render
+	for i, tab in ipairs(tabs) do
+		local widths = {95,95,133,105,74,68,38}
+		local x = 0
+		for j=1,i-1 do x += widths[j]+6 end
+		local b = button(nav, i == 7 and "⚙" or tab[1], widths[i], 38)
+		b.Position = UDim2.fromOffset(i == 7 and 690 or x,0)
+		navButtons[i] = b
+		b.MouseButton1Click:Connect(function() current = i; render() end)
+	end
+	local function toggle(parent, text, key, initial, onToggle)
+		if state[key] == nil then state[key] = initial or false end
+		local row = make("TextButton", { Size = UDim2.new(1,0,0,26), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, parent)
+		local box = round(make("Frame", { Size = UDim2.fromOffset(18,18), Position = UDim2.fromOffset(0,4), BackgroundColor3 = C.frame }, row),3)
+		stroke(box)
+		local tick = label(row, text, 13)
+		tick.Position = UDim2.fromOffset(28,0)
+		tick.Size = UDim2.new(1,-28,1,0)
+		local function update() box.BackgroundColor3 = state[key] and C.accent or C.frame end
+		update()
+		row.MouseButton1Click:Connect(function() changed(key, not state[key]); update(); if onToggle then onToggle(state[key]) end end)
+		return row
+	end
+	local function slider(parent, text, key, lo, hi, initial, suffix)
+		if state[key] == nil then state[key] = initial end
+		local holder = make("Frame", { Size = UDim2.new(1,0,0,49), BackgroundTransparency = 1 }, parent)
+		local caption = label(holder, text, 12)
+		caption.Size = UDim2.new(1,-52,0,20)
+		local value = label(holder, "", 12, C.muted)
+		value.Position = UDim2.new(1,-52,0,0); value.Size = UDim2.fromOffset(52,20); value.TextXAlignment = Enum.TextXAlignment.Right
+		local track = round(make("Frame", { Position = UDim2.fromOffset(0,30), Size = UDim2.new(1,0,0,7), BackgroundColor3 = C.frame }, holder),4)
+		local fill = round(make("Frame", { Size = UDim2.new(0,0,1,0), BackgroundColor3 = C.accent }, track),4)
+		local hit = make("TextButton", { Size = UDim2.new(1,0,0,24), Position = UDim2.fromOffset(0,-8), BackgroundTransparency = 1, Text = "" }, track)
+		local function update()
+			fill.Size = UDim2.new((state[key]-lo)/(hi-lo),0,1,0)
+			value.Text = string.format("%.1f%s", state[key], suffix or "")
+		end
+		local function setFromInput(input)
+			local fraction = math.clamp((input.Position.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+			local n = lo+(hi-lo)*fraction
+			if hi-lo > 10 then n = math.floor(n+.5) else n = math.floor(n*10+.5)/10 end
+			changed(key,n); update()
+		end
+		local sliding = false
+		hit.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then sliding = true; setFromInput(input) end
+		end)
+		table.insert(pageConnections, UserInputService.InputChanged:Connect(function(input)
+			if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then setFromInput(input) end
+		end))
+		table.insert(pageConnections, UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then sliding = false end
+		end))
+		update()
+	end
+	local function dropdown(parent, text, key, choices)
+		if state[key] == nil then state[key] = choices[1] end
+		label(parent,text,12)
+		local b = button(parent,state[key].."  ▾",240,30)
+		b.MouseButton1Click:Connect(function()
+			local at = table.find(choices,state[key]) or 0
+			changed(key,choices[at % #choices + 1]); b.Text = state[key].."  ▾"
+		end)
+	end
+	local function colorControl(parent, name, key, initial)
+		if not state[key] then state[key] = initial end
+		local row = make("Frame", { Size = UDim2.new(1,0,0,30), BackgroundTransparency = 1 }, parent)
+		local text = label(row,name,12); text.Size = UDim2.new(1,-110,1,0)
+		local swatch = round(make("Frame", { Position = UDim2.new(1,-103,0,4), Size = UDim2.fromOffset(25,22), BackgroundColor3 = state[key] }, row),3)
+		local field = round(make("TextBox", { Position = UDim2.new(1,-72,0,2), Size = UDim2.fromOffset(72,26), BackgroundColor3 = C.frame,
+			TextColor3 = C.text, TextSize = 11, Font = Enum.Font.Code, ClearTextOnFocus = false, Text = "" }, row),3)
+		local function hex(c) return string.format("#%02X%02X%02X",math.floor(c.R*255+.5),math.floor(c.G*255+.5),math.floor(c.B*255+.5)) end
+		field.Text = hex(state[key])
+		field.FocusLost:Connect(function()
+			local h = field.Text:match("^#?([%x][%x][%x][%x][%x][%x])$")
+			if h then
+				local c = Color3.fromRGB(tonumber(h:sub(1,2),16),tonumber(h:sub(3,4),16),tonumber(h:sub(5,6),16))
+				changed(key,c); swatch.BackgroundColor3 = c
+				field.Text = hex(c)
+				local themeKey = key:match("^theme%.(.+)$")
+				if themeKey and C[themeKey] then C[themeKey] = c; render() end
+			end
+			if field.Parent then field.Text = hex(state[key]) end
+		end)
+	end
+	local function scroll(parent, pos, size)
+		local s = make("ScrollingFrame", { Position = pos, Size = size, BackgroundTransparency = 1, BorderSizePixel = 0,
+			ScrollBarThickness = 5, ScrollBarImageColor3 = C.border, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y }, parent)
+		pad(s, 10); stack(s, 12)
+		return s
+	end
+	local function placeholder(parent, tab, sub)
+		local p = panel(parent)
+		section(p, sub or tab)
+		label(p, "This section has no controls in the original ImGui source.", 12, C.muted)
+	end
+	local function combat(parent, sub)
+		if sub ~= 1 then placeholder(parent,"Combat",tabs[1][2][sub]); return end
+		local left = scroll(parent,UDim2.fromOffset(0,0),UDim2.new(.5,-6,1,0))
+		local right = scroll(parent,UDim2.new(.5,6,0,0),UDim2.new(.5,-6,1,0))
+		local a = panel(left)
+		local optionRows = {}
+		toggle(a,"Legit","combat.legitEnabled",false,function(enabled)
+			for _,row in ipairs(optionRows) do row.Visible = enabled end
+		end)
+		for _, item in ipairs({{"Predict aim","combat.predictAim"},{"Auto group","combat.autoGroup"},{"Visible check","combat.visibleCheck"},
+			{"Flash check","combat.flashCheck"},{"Scope check","combat.scopeCheck"},{"Humanized smooth","combat.humanizedSmooth"},{"Hit chance","combat.hitChance"}}) do
+			local row = toggle(a,item[1],item[2]); row.Visible = state["combat.legitEnabled"]; table.insert(optionRows,row)
+		end
+		local b = panel(left)
+		slider(b,"Humanized Smoothness","combat.smoothness",0,100,30,"%")
+		slider(b,"Hit chance","combat.hitChancePercent",0,100,70,"%")
+		local d = panel(right); toggle(d,"Draw FOV","combat.drawFov")
+		section(d,"Render")
+		for _, item in ipairs({{"Draw circle outlines","combat.circleOutlines"},{"Draw circle filled","combat.circleFilled"},
+			{"Draw center tracer","combat.centerTracer"},{"Draw recoil circle","combat.recoilCircle"}}) do toggle(d,item[1],item[2]) end
+		section(d,"Colors")
+		colorControl(d,"Circle outlines","combat.color.outlines",Color3.fromRGB(0,0,255))
+		colorControl(d,"Circle filled","combat.color.filled",Color3.fromRGB(0,0,255))
+		colorControl(d,"Center tracer","combat.color.tracer",Color3.fromRGB(0,255,0))
+		colorControl(d,"Recoil circle","combat.color.recoil",Color3.fromRGB(255,0,0))
+		section(d,"Configs")
+		slider(d,"Line thickness","combat.lineThickness",.5,3,1,"px")
+	end
+	local function visuals(parent)
+		local s = scroll(parent,UDim2.new(),UDim2.new(1,0,1,0))
+		local p = panel(s,.5)
+		section(p,"Combo")
+		dropdown(p,"Main target","visuals.mainTarget",{"Header","Body","Limbs"})
+		dropdown(p,"Aim mode","visuals.aimMode",{"Legit","Rage","Bot"})
+		section(p,"Keybind")
+		local b = button(p,"Insert",240,30)
+		local waiting = false
+		b.MouseButton1Click:Connect(function() waiting = true; b.Text = "Press a key..." end)
+		table.insert(pageConnections, UserInputService.InputBegan:Connect(function(input, processed)
+			if waiting and not processed and input.UserInputType == Enum.UserInputType.Keyboard then
+				waiting = false; changed("visuals.keybind",input.KeyCode); b.Text = input.KeyCode.Name
+			end
+		end))
+	end
+	local function luaPage(parent)
+		local left = make("Frame", { Size = UDim2.new(1,-250,1,0), BackgroundTransparency = 1 }, parent)
+		local path = round(make("TextLabel", { Size = UDim2.new(1,0,0,38), BackgroundColor3 = C.panel, Text = "Please select a script",
+			TextColor3 = C.muted, TextSize = 12, Font = Enum.Font.Code, TextXAlignment = Enum.TextXAlignment.Left }, left),4)
+		stroke(path)
+		local editor = round(make("TextBox", { Position = UDim2.fromOffset(0,48), Size = UDim2.new(1,0,1,-96), BackgroundColor3 = C.panel,
+			Text = "", TextColor3 = C.text, PlaceholderText = "-- Select or create a script", PlaceholderColor3 = C.muted,
+			Font = Enum.Font.Code, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+			MultiLine = true, ClearTextOnFocus = false, TextWrapped = false }, left),4)
+		stroke(editor); pad(editor,10)
+		local controls = make("Frame", { Position = UDim2.new(0,0,1,-38), Size = UDim2.new(1,0,0,38), BackgroundTransparency = 1 }, left)
+		local explorer = round(make("Frame", { Position = UDim2.new(1,-235,0,0), Size = UDim2.new(0,235,1,0),
+			BackgroundColor3 = C.panel, BorderSizePixel = 0 }, parent),5)
+		stroke(explorer)
+		local title = label(explorer,"Explorer",13,C.accent)
+		title.Position = UDim2.fromOffset(13,8)
+		title.Size = UDim2.new(1,-26,0,26)
+		local list = scroll(explorer,UDim2.fromOffset(8,40),UDim2.new(1,-16,1,-92))
+		local selectedScript
+		local function selectScript(name)
+			selectedScript = name; path.Text = "  "..name; editor.Text = scripts[name] or ""
+		end
+		local function refreshList()
+			for _, child in ipairs(list:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
+			local names = {}; for name in pairs(scripts) do table.insert(names,name) end; table.sort(names)
+			for _, name in ipairs(names) do
+				local b = button(list,name,190,30); b.Size = UDim2.new(1,-4,0,30)
+				b.MouseButton1Click:Connect(function() selectScript(name) end)
+			end
+		end
+		refreshList()
+		local clear = button(controls,"Clear",64,32); clear.MouseButton1Click:Connect(function() editor.Text = "" end)
+		local open = button(controls,"Open",64,32); open.Position = UDim2.fromOffset(72,0)
+		open.MouseButton1Click:Connect(function() if selectedScript then editor.Text = scripts[selectedScript] end end)
+		local save = button(controls,"Save",64,32); save.Position = UDim2.fromOffset(144,0)
+		save.MouseButton1Click:Connect(function() if selectedScript then scripts[selectedScript] = editor.Text; changed("lua.saved."..selectedScript,editor.Text) end end)
+		local execute = button(controls,"Execute",90,32); execute.Position = UDim2.new(1,-90,0,0)
+		execute.MouseButton1Click:Connect(function()
+			if options.onExecute then options.onExecute(editor.Text,selectedScript) end
+		end)
+		local newName = round(make("TextBox", { Position = UDim2.new(0,10,1,-40), Size = UDim2.new(1,-20,0,28), BackgroundColor3 = C.frame,
+			Text = "", PlaceholderText = "New script name", TextColor3 = C.text, PlaceholderColor3 = C.muted,
+			TextSize = 12, Font = Enum.Font.Code, ClearTextOnFocus = false }, explorer),4)
+		newName.FocusLost:Connect(function(enter)
+			if enter and newName.Text ~= "" then
+				local name = newName.Text:match("^[%w_%-]+%.lua$") and newName.Text or nil
+				if name then scripts[name] = scripts[name] or ""; refreshList(); selectScript(name); newName.Text = "" end
+			end
+		end)
+	end
+	local function settings(parent)
+		local s = scroll(parent,UDim2.new(),UDim2.new(1,0,1,0))
+		local p = panel(s)
+		section(p,"Theme")
+		for _, item in ipairs({
+			{"Accent","theme.accent",C.accent},{"Accent hovered","theme.accentHovered",C.accentHovered},
+			{"Accent active","theme.accentActive",C.accentActive},
+			{"Text","theme.text",C.text},{"Text disabled","theme.muted",C.muted},
+			{"Button","theme.button",C.button},{"Button hovered","theme.hover",C.hover},
+			{"Button active","theme.buttonActive",C.buttonActive},
+			{"Frame","theme.frame",C.frame},{"Frame hovered","theme.frameHovered",C.frameHovered},
+			{"Frame active","theme.frameActive",C.frameActive},
+			{"Title","theme.title",C.title},{"Border","theme.border",C.border},
+			{"Window","theme.window",C.window},{"Child","theme.panel",C.panel},
+			{"Popup","theme.popup",C.popup},
+		}) do colorControl(p,item[1],item[2],item[3]) end
+	end
+	render = function()
+		for _,connection in ipairs(pageConnections) do connection:Disconnect() end
+		table.clear(pageConnections)
+		for i,b in ipairs(navButtons) do b.TextColor3 = i == current and C.accent or C.text end
+		for _,child in ipairs(body:GetChildren()) do child:Destroy() end
+		local subs = tabs[current][2]
+		local content = body
+		if #subs > 0 then
+			local sidebar = panel(body)
+			sidebar.Size = UDim2.new(0,180,1,0); sidebar.AutomaticSize = Enum.AutomaticSize.None
+			for i,name in ipairs(subs) do
+				local b = button(sidebar,name,150,36)
+				b.TextColor3 = selected[current] == i and C.accent or C.text
+				b.MouseButton1Click:Connect(function() selected[current] = i; render() end)
+			end
+			content = make("Frame", { Position = UDim2.fromOffset(194,0), Size = UDim2.new(1,-194,1,0), BackgroundTransparency = 1 }, body)
+		end
+		if current == 1 then combat(content,selected[1])
+		elseif current == 2 then visuals(content)
+		elseif current == 3 or current == 4 or current == 5 then placeholder(content,tabs[current][1],subs[selected[current]])
+		elseif current == 6 then luaPage(content)
+		else settings(content) end
+	end
+	render()
+	local api = { gui = gui, state = state, scripts = scripts }
+	function api:show() gui.Enabled = true end
+	function api:hide() gui.Enabled = false end
+	function api:destroy()
+		for _,connection in ipairs(connections) do connection:Disconnect() end
+		for _,connection in ipairs(pageConnections) do connection:Disconnect() end
+		gui:Destroy()
+	end
+	return api
+end
+
+return ZyrexUI
